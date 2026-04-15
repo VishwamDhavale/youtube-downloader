@@ -1,0 +1,15 @@
+{
+  "name": "youtube-downloader",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install:all": "pnpm install && cd server && pnpm install && cd ../client && pnpm install",
+    "dev": "pnpm --parallel --filter ./server --filter ./client dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.0"
+}
