@@ -5,6 +5,7 @@ import youtubeDlPkg from 'youtube-dl-exec';
 import { EventEmitter } from 'events';
 import path from 'path';
 import fs from 'fs';
+import { execFile } from 'child_process';
 
 const app = express();
 const port = 3001;
@@ -17,6 +18,11 @@ interface DownloadTask {
   url: string;
   outputFolder: string;
   format?: string;
+  formatExt?: string;
+  formatVcodec?: string;
+  formatAcodec?: string;
+  title?: string;
+  thumbnail?: string;
   progress: number;
   status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error';
   message: string;
@@ -26,8 +32,53 @@ interface DownloadTask {
 
 const tasks: Map<string, DownloadTask> = new Map();
 
+const runPickerCommand = (command: string, args: string[]) =>
+  new Promise<string>((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(stdout.trim());
+    });
+  });
+
+const selectFolder = async () => {
+  if (process.platform === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      "$dialog.Description = 'Select output folder'",
+      '$dialog.ShowNewFolderButton = $true',
+      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $dialog.SelectedPath }'
+    ].join('; ');
+
+    return runPickerCommand('powershell.exe', ['-NoProfile', '-STA', '-Command', script]);
+  }
+
+  if (process.platform === 'darwin') {
+    return runPickerCommand('osascript', [
+      '-e',
+      'POSIX path of (choose folder with prompt "Select output folder")'
+    ]);
+  }
+
+  try {
+    return await runPickerCommand('zenity', [
+      '--file-selection',
+      '--directory',
+      '--title=Select output folder'
+    ]);
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  return runPickerCommand('kdialog', ['--getexistingdirectory', process.env.HOME || '/']);
+};
+
 // Session Management Utility
-const getSessionFilePath = (folder: string) => path.join(folder, '.ytdl-session.json');
+const getSessionFilePath = (folder: string) => path.join(folder, 'ytdl-session.json');
 
 const updateSessionFile = (folder: string, task: Partial<DownloadTask>) => {
   try {
@@ -98,6 +149,31 @@ app.post('/api/sessions', (req, res) => {
   }
 });
 
+app.post('/api/select-folder', async (_req, res) => {
+  try {
+    const folder = await selectFolder();
+
+    if (!folder) {
+      return res.json({ folder: '' });
+    }
+
+    res.json({ folder });
+  } catch (error: any) {
+    if (error.code === 1) {
+      return res.json({ folder: '' });
+    }
+
+    if (error.code === 'ENOENT') {
+      return res.status(500).json({
+        error: 'No folder picker found. Install zenity or kdialog, then try again.'
+      });
+    }
+
+    console.error('Folder picker error:', error);
+    res.status(500).json({ error: error.message || 'Failed to open folder picker' });
+  }
+});
+
 app.post('/api/info', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
@@ -147,7 +223,7 @@ app.post('/api/info', async (req, res) => {
 });
 
 app.post('/api/download', (req, res) => {
-  const { url, outputFolder, format, title, thumbnail } = req.body;
+  const { url, outputFolder, format, formatExt, formatVcodec, formatAcodec, title, thumbnail } = req.body;
 
   if (!url || !outputFolder) {
     return res.status(400).json({ error: 'URL and output folder are required' });
@@ -161,6 +237,9 @@ app.post('/api/download', (req, res) => {
     url,
     outputFolder,
     format,
+    formatExt,
+    formatVcodec,
+    formatAcodec,
     title,
     thumbnail,
     progress: 0,
@@ -254,19 +333,29 @@ async function startDownload(task: DownloadTask) {
       newline: true,
       progress: true,
       noCheckCertificates: true,
-      preferFreeFormats: true,
     };
 
     if (task.format) {
-      // If the format is just a number (video only ID), append +bestaudio to ensure we get sound
-      // unless it's already a combined format or audio-only
+      const selectedExt = task.formatExt?.toLowerCase();
+      const wantsMp4 = selectedExt === 'mp4';
+      const hasCodecInfo = Boolean(task.formatVcodec || task.formatAcodec);
+      const isAudioOnly = task.formatVcodec === 'none' && task.formatAcodec !== 'none';
+      const isVideoOnly = task.formatVcodec !== 'none' && task.formatAcodec === 'none';
+      const isCombined = task.formatVcodec !== 'none' && task.formatAcodec !== 'none';
       const isSimpleId = /^\d+$/.test(task.format);
-      const isVideoOnly = task.format.includes('video') || (isSimpleId && !task.format.includes('+'));
-      
-      // We'll trust the frontend or append +bestaudio if we suspect it's video only
-      // A more robust way is to check the format list, but appending +bestaudio/best 
-      // is generally safe for yt-dlp when a video-only ID is provided.
-      if (isVideoOnly && !task.format.includes('audio') && !task.format.includes('best')) {
+
+      if (wantsMp4) {
+        options.mergeOutputFormat = 'mp4';
+      }
+
+      if (hasCodecInfo && isVideoOnly && wantsMp4) {
+        options.format = `${task.format}+bestaudio[ext=m4a]/best[ext=mp4]/best`;
+      } else if (hasCodecInfo && isVideoOnly) {
+        options.format = `${task.format}+bestaudio/best`;
+      } else if (hasCodecInfo && (isCombined || isAudioOnly)) {
+        options.format = task.format;
+      } else if (isSimpleId && !task.format.includes('+')) {
+        // Backward-compatible fallback for resumed tasks created before codec details were stored.
         options.format = `${task.format}+bestaudio/best`;
       } else {
         options.format = task.format;

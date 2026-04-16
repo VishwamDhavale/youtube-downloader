@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { 
   Play, Download, List, Settings, Plus, Folder, 
-  Info, Loader2, Pause, RotateCcw, XCircle, CheckCircle,
-  Video, Music, Layers
+  Info, Loader2, Pause, RotateCcw, XCircle,
+  Video, Layers
 } from 'lucide-react';
 import './App.css';
 interface VideoFormat {
@@ -51,6 +51,23 @@ function App() {
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<string>('');
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
+  const [isSelectingFolder, setIsSelectingFolder] = useState(false);
+
+  const selectOutputFolder = async () => {
+    setIsSelectingFolder(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/select-folder', {
+        method: 'POST',
+      });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      if (data.folder) setOutputFolder(data.folder);
+    } catch (err: any) {
+      alert('Failed to select folder: ' + err.message);
+    } finally {
+      setIsSelectingFolder(false);
+    }
+  };
 
   const loadSessions = async () => {
     if (!outputFolder) return;
@@ -110,6 +127,7 @@ function App() {
   const startDownload = async () => {
     if (!url || !outputFolder) return;
     try {
+      const formatDetails = metadata?.formats.find(f => f.formatId === selectedFormat);
       const response = await fetch('http://localhost:3001/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -117,6 +135,9 @@ function App() {
           url, 
           outputFolder, 
           format: selectedFormat,
+          formatExt: formatDetails?.ext,
+          formatVcodec: formatDetails?.vcodec,
+          formatAcodec: formatDetails?.acodec,
           title: metadata?.title,
           thumbnail: metadata?.thumbnail
         }),
@@ -168,7 +189,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, action }),
       });
-      const data = await response.json();
+      await response.json();
       
       if (action === 'resume') {
         setupSSE(taskId);
@@ -252,6 +273,15 @@ function App() {
                       onChange={(e) => setOutputFolder(e.target.value)}
                     />
                   </div>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={selectOutputFolder}
+                    disabled={isSelectingFolder}
+                    title="Choose an output folder"
+                  >
+                    {isSelectingFolder ? <Loader2 className="animate-spin" size={20} /> : <Folder size={20} />}
+                    Browse
+                  </button>
                   <button 
                     className="btn btn-secondary" 
                     onClick={loadSessions}
