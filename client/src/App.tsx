@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { 
-  Play, Download, List, Settings, Plus, Folder, 
+import {
+  Play, Download, List, Settings, Plus, Folder,
   Info, Loader2, Pause, RotateCcw, XCircle,
-  Video, Layers
+  Video, Layers, FileText, X, MessageSquare, ThumbsUp
 } from 'lucide-react';
 import './App.css';
 interface VideoFormat {
@@ -52,6 +52,11 @@ function App() {
   const [selectedFormat, setSelectedFormat] = useState<string>('');
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [isSelectingFolder, setIsSelectingFolder] = useState(false);
+  const [downloadSubtitles, setDownloadSubtitles] = useState(false);
+  const [transcript, setTranscript] = useState<any[] | null>(null);
+  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
+  const [commentsData, setCommentsData] = useState<any | null>(null);
+  const [isFetchingComments, setIsFetchingComments] = useState(false);
 
   const selectOutputFolder = async () => {
     setIsSelectingFolder(true);
@@ -79,14 +84,14 @@ function App() {
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
-      
+
       // Update tasks and merge with existing ones (prevent duplicates)
       setTasks(prev => {
         const existingIds = new Set(prev.map(t => t.id));
         const newTasks = data.filter((t: any) => !existingIds.has(t.id));
         return [...prev, ...newTasks];
       });
-      
+
       if (data.length > 0) {
         alert(`Loaded ${data.length} tasks from session file.`);
       } else {
@@ -117,6 +122,9 @@ function App() {
       } else {
         setSelectedFormat('best');
       }
+      setTranscript(null);
+      setCommentsData(null);
+      setDownloadSubtitles(false);
     } catch (err: any) {
       alert('Failed to fetch video info: ' + err.message);
     } finally {
@@ -131,19 +139,20 @@ function App() {
       const response = await fetch('http://localhost:3001/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          url, 
-          outputFolder, 
+        body: JSON.stringify({
+          url,
+          outputFolder,
           format: selectedFormat,
           formatExt: formatDetails?.ext,
           formatVcodec: formatDetails?.vcodec,
           formatAcodec: formatDetails?.acodec,
           title: metadata?.title,
-          thumbnail: metadata?.thumbnail
+          thumbnail: metadata?.thumbnail,
+          downloadSubtitles
         }),
       });
       const { taskId } = await response.json();
-      
+
       const newTask: DownloadTask = {
         id: taskId,
         url,
@@ -153,11 +162,11 @@ function App() {
         status: 'pending',
         message: 'Initializing...'
       };
-      
+
       setTasks(prev => [newTask, ...prev]);
       setActiveView('list');
       setupSSE(taskId);
-      
+
       // Reset form
       setUrl('');
       setMetadata(null);
@@ -170,7 +179,7 @@ function App() {
     const eventSource = new EventSource(`http://localhost:3001/api/progress/${taskId}`);
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      setTasks(prev => prev.map(t => 
+      setTasks(prev => prev.map(t =>
         t.id === taskId ? { ...t, ...data } : t
       ));
       if (data.status === 'completed' || data.status === 'error') {
@@ -190,7 +199,7 @@ function App() {
         body: JSON.stringify({ taskId, action }),
       });
       await response.json();
-      
+
       if (action === 'resume') {
         setupSSE(taskId);
       } else if (action === 'cancel') {
@@ -201,6 +210,50 @@ function App() {
     }
   };
 
+  const fetchTranscript = async () => {
+    if (!url) return;
+    setIsFetchingTranscript(true);
+    try {
+      const response = await fetch('http://localhost:3001/api/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      setTranscript(data);
+    } catch (err: any) {
+      alert('Failed to fetch transcript: ' + err.message);
+    } finally {
+      setIsFetchingTranscript(false);
+    }
+  };
+
+  // const fetchComments = async () => {
+  //   if (!url) return;
+  //   setIsFetchingComments(true);
+  //   try {
+  //     const response = await fetch('http://localhost:3001/api/comments', {
+  //       method: 'POST',
+  //       headers: { 'Content-Type': 'application/json' },
+  //       body: JSON.stringify({ url }),
+  //     });
+  //     const data = await response.json();
+  //     if (data.error) throw new Error(data.error);
+
+  //     // Filter to only show top-level comments and maybe sort them
+  //     const topLevelComments = (data.comments || []).filter((c: any) => c.parent === 'root' || !c.parent || c.parent === 'none');
+  //     setCommentsData({
+  //       totalCount: data.commentCount,
+  //       comments: topLevelComments
+  //     });
+  //   } catch (err: any) {
+  //     alert('Failed to fetch comments: ' + err.message);
+  //   } finally {
+  //     setIsFetchingComments(false);
+  //   }
+  // };
+
   return (
     <div className="dashboard">
       <aside className="sidebar">
@@ -208,15 +261,15 @@ function App() {
           <Play fill="currentColor" size={24} />
           <span>YT Downloader</span>
         </div>
-        
+
         <nav className="sidebar-nav">
-          <button 
+          <button
             className={`nav-item ${activeView === 'new' ? 'active' : ''}`}
             onClick={() => setActiveView('new')}
           >
             <Plus size={20} /> New Download
           </button>
-          <button 
+          <button
             className={`nav-item ${activeView === 'list' ? 'active' : ''}`}
             onClick={() => setActiveView('list')}
           >
@@ -240,14 +293,14 @@ function App() {
               <div className="form-group">
                 <label className="label">YouTube URL</label>
                 <div style={{ display: 'flex', gap: '1rem' }}>
-                  <input 
-                    className="input" 
-                    placeholder="https://www.youtube.com/watch?v=..." 
+                  <input
+                    className="input"
+                    placeholder="https://www.youtube.com/watch?v=..."
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                   />
-                  <button 
-                    className="btn btn-primary" 
+                  <button
+                    className="btn btn-primary"
                     onClick={fetchInfo}
                     disabled={isLoadingInfo || !url}
                   >
@@ -261,20 +314,20 @@ function App() {
                 <label className="label">Output Folder</label>
                 <div style={{ display: 'flex', gap: '1rem' }}>
                   <div style={{ position: 'relative', flex: 1 }}>
-                    <Folder 
-                      size={18} 
-                      style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} 
+                    <Folder
+                      size={18}
+                      style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }}
                     />
-                    <input 
-                      className="input" 
+                    <input
+                      className="input"
                       style={{ paddingLeft: '2.75rem' }}
-                      placeholder="/home/user/Downloads" 
+                      placeholder="/home/user/Downloads"
                       value={outputFolder}
                       onChange={(e) => setOutputFolder(e.target.value)}
                     />
                   </div>
-                  <button 
-                    className="btn btn-secondary" 
+                  <button
+                    className="btn btn-secondary"
                     onClick={selectOutputFolder}
                     disabled={isSelectingFolder}
                     title="Choose an output folder"
@@ -282,8 +335,8 @@ function App() {
                     {isSelectingFolder ? <Loader2 className="animate-spin" size={20} /> : <Folder size={20} />}
                     Browse
                   </button>
-                  <button 
-                    className="btn btn-secondary" 
+                  <button
+                    className="btn btn-secondary"
                     onClick={loadSessions}
                     disabled={!outputFolder}
                     title="Load previous downloads from this folder"
@@ -300,12 +353,12 @@ function App() {
                   <div className="video-meta">
                     <h2 className="video-title">{metadata.title}</h2>
                     <p className="text-secondary">{metadata.uploader} • {metadata.isPlaylist ? 'Playlist' : 'Video'}</p>
-                    
+
                     <div className="form-group" style={{ marginTop: '1rem' }}>
                       <label className="label">
                         {metadata.isPlaylist ? 'Quality Preset' : 'Format / Quality'}
                       </label>
-                      <select 
+                      <select
                         className="input select"
                         value={selectedFormat}
                         onChange={(e) => setSelectedFormat(e.target.value)}
@@ -320,7 +373,7 @@ function App() {
                         ) : (
                           <>
                             <option value="best">Best Quality (Auto)</option>
-                            
+
                             {/* Video + Audio */}
                             <optgroup label="Video + Audio (High Quality)">
                               {metadata.formats
@@ -358,13 +411,146 @@ function App() {
                       </select>
                     </div>
 
-                    <button 
-                      className="btn btn-primary" 
-                      style={{ width: 'fit-content', marginTop: '1rem' }}
-                      onClick={startDownload}
-                    >
-                      <Download size={20} /> Start Download
-                    </button>
+                    <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        id="download-subtitles"
+                        checked={downloadSubtitles}
+                        onChange={(e) => setDownloadSubtitles(e.target.checked)}
+                      />
+                      <label htmlFor="download-subtitles" style={{ fontSize: '0.875rem', cursor: 'pointer' }}>
+                        Download Subtitles (if available)
+                      </label>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ width: 'fit-content' }}
+                        onClick={startDownload}
+                      >
+                        <Download size={20} /> Start Download
+                      </button>
+
+                      {!metadata.isPlaylist && (
+                        <>
+                          <button
+                            className="btn btn-secondary"
+                            style={{ width: 'fit-content' }}
+                            onClick={fetchTranscript}
+                            disabled={isFetchingTranscript}
+                          >
+                            {isFetchingTranscript ? <Loader2 className="animate-spin" size={20} /> : <FileText size={20} />}
+                            View Transcript
+                          </button>
+
+                          {/*<button
+                            className="btn btn-secondary"
+                            style={{ width: 'fit-content' }}
+                            onClick={fetchComments}
+                            disabled={isFetchingComments}
+                          >
+                            {isFetchingComments ? <Loader2 className="animate-spin" size={20} /> : <MessageSquare size={20} />}
+                            View Comments
+                          </button>*/}
+                        </>
+                      )}
+                    </div>
+
+                    {transcript && (
+                      <div className="card" style={{ marginTop: '1.5rem', background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                          <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Video Transcript</h3>
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                              className="btn btn-secondary btn-icon"
+                              title="Download as .txt"
+                              onClick={() => {
+                                const text = transcript.map(item => {
+                                  const mins = Math.floor(item.offset / 60000);
+                                  const secs = (Math.floor(item.offset / 1000) % 60).toString().padStart(2, '0');
+                                  return `[${mins}:${secs}] ${item.text}`;
+                                }).join('\n');
+                                const blob = new Blob([text], { type: 'text/plain' });
+                                const a = document.createElement('a');
+                                a.href = URL.createObjectURL(blob);
+                                a.download = `${metadata?.title || 'transcript'}.txt`;
+                                a.click();
+                                URL.revokeObjectURL(a.href);
+                              }}
+                              style={{ padding: '0.25rem' }}
+                            >
+                              <Download size={18} />
+                            </button>
+                            <button
+                              className="btn btn-icon"
+                              onClick={() => setTranscript(null)}
+                              style={{ padding: '0.25rem' }}
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{ maxHeight: '300px', overflowY: 'auto', fontSize: '0.875rem', lineHeight: '1.5', paddingRight: '0.5rem' }}>
+                          {transcript.length > 0 ? (
+                            transcript.map((item, index) => (
+                              <div key={index} style={{ marginBottom: '0.5rem', display: 'flex', gap: '1rem' }}>
+                                <span style={{ color: '#6b7280', whiteSpace: 'nowrap', width: '3rem', fontFamily: 'monospace' }}>
+                                  {Math.floor(item.offset / 60000)}:{(Math.floor(item.offset / 1000) % 60).toString().padStart(2, '0')}
+                                </span>
+                                <span>{item.text}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <p style={{ color: '#6b7280' }}>No transcript available for this video.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {commentsData && (
+                      <div className="card" style={{ marginTop: '1.5rem', background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                          <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>
+                            Comments ({commentsData.totalCount ? commentsData.totalCount.toLocaleString() : commentsData.comments.length})
+                          </h3>
+                          <button
+                            className="btn btn-icon"
+                            onClick={() => setCommentsData(null)}
+                            style={{ padding: '0.25rem' }}
+                          >
+                            <X size={18} />
+                          </button>
+                        </div>
+                        <div style={{ maxHeight: '400px', overflowY: 'auto', paddingRight: '0.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          {commentsData.comments.length > 0 ? (
+                            commentsData.comments.slice(0, 50).map((comment: any, index: number) => (
+                              <div key={index} style={{ background: '#ffffff', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                  <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{comment.author}</span>
+                                  <span style={{ color: '#6b7280', fontSize: '0.75rem' }}>{comment.timeText}</span>
+                                </div>
+                                <p style={{ fontSize: '0.875rem', lineHeight: '1.5', whiteSpace: 'pre-wrap', marginBottom: '0.75rem' }}>
+                                  {comment.text}
+                                </p>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: '#6b7280', fontSize: '0.75rem' }}>
+                                  <ThumbsUp size={14} />
+                                  <span>{comment.likeCount > 0 ? comment.likeCount.toLocaleString() : '0'}</span>
+                                  {comment.isFavorited && <span style={{ marginLeft: '0.5rem', color: '#ef4444' }}>❤️ Creator favorited</span>}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <p style={{ color: '#6b7280', fontSize: '0.875rem' }}>No comments available.</p>
+                          )}
+                          {commentsData.comments.length > 50 && (
+                            <p style={{ textAlign: 'center', fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>
+                              Showing top 50 comments...
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -393,7 +579,7 @@ function App() {
                         <Video size={24} style={{ margin: 'auto', color: '#9ca3af' }} />
                       </div>
                     )}
-                    
+
                     <div className="progress-container">
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
                         <span style={{ fontWeight: 600, fontSize: '0.925rem' }} className="truncate">
@@ -413,25 +599,25 @@ function App() {
 
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       {task.status === 'downloading' || task.status === 'pending' ? (
-                        <button 
-                          className="btn btn-secondary btn-icon" 
+                        <button
+                          className="btn btn-secondary btn-icon"
                           title="Pause"
                           onClick={() => handleAction(task.id, 'pause')}
                         >
                           <Pause size={18} />
                         </button>
                       ) : (task.status === 'paused' || task.status === 'error') ? (
-                        <button 
-                          className="btn btn-secondary btn-icon" 
+                        <button
+                          className="btn btn-secondary btn-icon"
                           title="Resume"
                           onClick={() => handleAction(task.id, 'resume')}
                         >
                           <RotateCcw size={18} />
                         </button>
                       ) : null}
-                      
-                      <button 
-                        className="btn btn-secondary btn-icon" 
+
+                      <button
+                        className="btn btn-secondary btn-icon"
                         title="Remove"
                         onClick={() => handleAction(task.id, 'cancel')}
                         style={{ color: '#ef4444' }}

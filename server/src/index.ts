@@ -23,6 +23,7 @@ interface DownloadTask {
   formatAcodec?: string;
   title?: string;
   thumbnail?: string;
+  downloadSubtitles?: boolean;
   progress: number;
   status: 'pending' | 'downloading' | 'paused' | 'completed' | 'error';
   message: string;
@@ -138,7 +139,8 @@ app.post('/api/sessions', (req, res) => {
         thumbnail: syncedTask.thumbnail,
         progress: syncedTask.progress,
         status: syncedTask.status,
-        message: syncedTask.message
+        message: syncedTask.message,
+        downloadSubtitles: syncedTask.downloadSubtitles
       };
     });
 
@@ -222,8 +224,60 @@ app.post('/api/info', async (req, res) => {
   }
 });
 
+app.post('/api/transcript', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+
+  try {
+    // Import the ESM build directly — the package has a bug where "type":"module"
+    // conflicts with its CJS "main" entry, so we bypass it.
+    const { fetchTranscript } = await import('youtube-transcript/dist/youtube-transcript.esm.js');
+    const transcript = await fetchTranscript(url);
+    res.json(transcript);
+  } catch (error: any) {
+    console.error('Transcript error:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch transcript' });
+  }
+});
+
+app.post('/api/comments', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+
+  try {
+    const ytDl: any = youtubeDlPkg;
+    const execFunc = ytDl.exec || ytDl;
+
+    const info = await execFunc(url, {
+      dumpJson: true,
+      writeComments: true,
+      noCheckCertificates: true,
+      playlistItems: '0',
+    });
+
+    const parsedInfo = JSON.parse(info.stdout);
+    const comments = parsedInfo.comments || [];
+    
+    res.json({
+      commentCount: parsedInfo.comment_count,
+      comments: comments.map((c: any) => ({
+        id: c.id,
+        author: c.author,
+        text: c.text,
+        likeCount: c.like_count,
+        timeText: c.time_text,
+        isFavorited: c.is_favorited,
+        parent: c.parent
+      }))
+    });
+  } catch (error: any) {
+    console.error('Comments error:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch comments' });
+  }
+});
+
 app.post('/api/download', (req, res) => {
-  const { url, outputFolder, format, formatExt, formatVcodec, formatAcodec, title, thumbnail } = req.body;
+  const { url, outputFolder, format, formatExt, formatVcodec, formatAcodec, title, thumbnail, downloadSubtitles } = req.body;
 
   if (!url || !outputFolder) {
     return res.status(400).json({ error: 'URL and output folder are required' });
@@ -242,6 +296,7 @@ app.post('/api/download', (req, res) => {
     formatAcodec,
     title,
     thumbnail,
+    downloadSubtitles,
     progress: 0,
     status: 'pending',
     message: 'Starting download...',
@@ -334,6 +389,12 @@ async function startDownload(task: DownloadTask) {
       progress: true,
       noCheckCertificates: true,
     };
+
+    if (task.downloadSubtitles) {
+      options.writeAutoSubs = true;
+      options.writeSubs = true;
+      options.subLangs = 'en'; // Download English subtitles, or we could leave it generic to download all
+    }
 
     if (task.format) {
       const selectedExt = task.formatExt?.toLowerCase();
