@@ -432,7 +432,7 @@ function App() {
                         <Download size={20} /> Start Download
                       </button>
 
-                      {!metadata.isPlaylist && (
+                      {!metadata.isPlaylist && (url.includes('youtube.com') || url.includes('youtu.be')) && (
                         <>
                           <button
                             className="btn btn-secondary"

@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "install:all": "pnpm install && cd server && pnpm install && cd ../client && pnpm install",
-    "dev": "pnpm --parallel --filter ./server --filter ./client dev"
+    "dev": "pnpm --parallel --filter ./server --filter ./client dev",
+    "update:ytdlp": "pnpm --filter ./server update:ytdlp"
   },
   "keywords": [],
   "author": "",
